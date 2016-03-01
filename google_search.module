@@ -1,0 +1,343 @@
+<?php
+
+/**
+* @file
+* Render a Google Search
+*/
+
+/**
+* Implements hook_menu().
+*/
+function google_search_menu() {
+    $items['show_me/%'] = array(
+        'title' => 'Google Search',
+        'description' => 'Display Google Search',
+        'page callback' => 'googlesearch',
+        'page arguments' => array(1),
+        'access arguments' => array('access content'),
+    );
+    $items['admin/config/googlesearch/settings'] = array(
+        'title' => 'Google Search Settings',
+        'description' => 'Cache Settings',
+        'page callback' => 'drupal_get_form',
+        'page arguments' => array('google_search_cacheform'),
+        'access arguments' => array('access administration pages'),
+        'type' => MENU_NORMAL_ITEM,
+    );
+    $items['ajax/searchgoogle'] = array (
+        'title' => 'Get Current search',
+        'page callback' => 'google_search_get_domains',
+        'access arguments' => array('access content'),
+        'type' => MENU_CALLBACK,
+    );
+return $items;
+}
+
+/**
+* Implements hook_page_build().
+*/
+function google_search_page_build(&$page) {
+    global $user, $language;
+    $path = drupal_get_path('module', 'google_search');
+
+    $page['page_bottom']['google_search'] = array(
+        '#attached' => array(),
+    );
+    $attached = &$page['page_bottom']['google_search']['#attached'];
+    $options = array('every_page' => TRUE);
+    $attached['css'][$path .'/google_search.css'] = $options;
+    $attached['js']['https://www.google.com/jsapi'] = $options;
+    $attached['js'][$path .'/google_search.js'] = $options;
+}
+/**
+* Function to get results from Google.
+*/
+function googlesearch($itemId){
+    $queryIP = db_select('geoip', 'g')
+    ->fields('g')
+    ->condition('begin_ip_number',ip2long('59.100.12.78'), '<')
+    ->condition('end_ip_number', ip2long('59.100.12.78'), '>');
+    $resultIP = $queryIP->execute();
+    while($recordsIP= $resultIP->fetchAssoc()) {
+        $countryCode = $recordsIP['ip_country_code'];
+    }
+          
+  
+    $cached = cache_get('googlesearchdata', 'cache');
+    if(!$cached) {
+        $node_item =  node_load($itemId);
+        $i=1;
+        $itemDescription =$node_item->title;
+        $brand_value =field_get_items('node', $node_item, 'field_brand', $node_item->language);
+        $category_value =field_get_items('node', $node_item, 'field_category', $node_item->language);
+        $getBrandTermId = isset($brand_value) ? $brand_value[0]['tid'] : null;
+        $getCategoryTermId = isset($category_value) ? $category_value[0]['tid'] : null;
+        
+        if(!empty($getBrandTermId)){
+            $show_nodes_list = array();
+            $show_nodes_array = variable_get('shownodes_nodes_toshow', array('add_domain'));
+            foreach ($show_nodes_array as $key => $value) {
+                if($value) {
+                    array_push($show_nodes_list,$value);
+                }
+            }
+            //Based on the node types create a query and then load the node types
+            $queryBrand = new EntityFieldQuery();
+            $queryCategory = new EntityFieldQuery();
+            $nodes = array();
+
+            $queryBrand
+            ->entityCondition('entity_type', 'node')
+            ->entityCondition('bundle', $show_nodes_list)
+            ->propertyCondition('status', 1)
+            ->fieldCondition('field_brand', 'tid',$getBrandTermId)
+            ->range(0, 1);
+            $resultBrand = $queryBrand->execute();
+
+            $queryCategory
+            ->entityCondition('entity_type', 'node')
+            ->entityCondition('bundle', $show_nodes_list)
+            ->propertyCondition('status', 1)
+            ->fieldCondition('field_category', 'tid',$getCategoryTermId);
+            $resultCategory = $queryCategory->execute();
+
+            if((isset($resultBrand['node']) && !empty(array_keys($resultBrand['node']))) && (isset($resultCategory['node']) && !empty(array_keys($resultCategory['node'])))){
+                $result_nids = array_unique(array_merge(array_keys($resultBrand['node']),array_keys($resultCategory['node'])));
+                $nodes= node_load_multiple(array_keys($resultBrand['node']));
+                
+                foreach($nodes as $node){
+                    $items= field_get_items('node', $node, 'field_domain', $node->language);
+                    $brandName = isset($items) ? $items[0]['value']:null;
+                }
+            }elseif(isset($resultCategory['node']) && !empty(array_keys($resultCategory['node']))){
+                $result_nids = array_keys($resultCategory['node']);
+                $brandName = null;
+            }elseif((isset($resultBrand['node']) && !empty(array_keys($resultBrand['node'])))){
+                $result_nids =array_keys($resultBrand['node']);
+                $nodes= node_load_multiple(array_keys($resultBrand['node']));
+                foreach($nodes as $node){
+                    $items= field_get_items('node', $node, 'field_domain', $node->language);
+                    $brandName = isset($items) ? $items[0]['value']:null;
+                }
+            }
+            if (isset($resultCategory['node']) || isset($resultBrand['node'])) {
+                $nids = $result_nids;
+                $nodes = node_load_multiple($nids);
+            }
+
+            //Loop through the loded nodes to create a list, it will get through the theme and get the results displayed
+            $list = array();
+            $domains = array();
+            $testing =array();
+            foreach ($nodes as $node) {
+                $options = array('absolute' => TRUE);
+                $url = url('node/' . $node->nid, $options);
+                $list[] = ''.$node->title.'';
+                $items = field_get_items('node', $node, 'field_domain', $node->language);
+                $domainName = isset($items) ? $items[0]['value']:'';
+                $domainNames = $items[0]['value'];
+                $i++;
+            }
+
+            $domains[]='<input type="hidden" name="brand_name" id="brand_name" value="'.$brandName.'">'
+                . '<input type="hidden" name="itemDescription" id="itemDescription" value="'.$itemDescription.'">'
+                . '<input type="hidden" name="country_code" id="country_code" value="'.$countryCode.'">'
+                . '<input type="hidden" name="nid" id="nid" value="'.$itemId.'">'
+                . '<div class="gsearch_results"><div id="gsearch_results_1"></div><div class="gsearch_results" id="gsearch_results_2"></div></div>';
+
+        }else{
+
+            $domains[]='<input type="hidden" name="itemDescription" id="itemDescription" value="'.$itemDescription.'">'
+                .'<input type="hidden" name="brand_name" id="brand_name" value="null">'
+                .'<input type="hidden" name="nid" id="nid" value="'.$itemId.'">'
+                .'<input type="hidden" name="country_code" id="country_code" value="'.$countryCode.'">'
+                .'<div class="gsearch_results"><div id="gsearch_results_1"></div></div>';
+        }
+        $domains[].='<div id="ajax-result"></div><input type="hidden" name="cache_var" id="cache_var" value="0">';
+        //Return the content
+        $theme_args = array('items' => $domains, 'type' => 'li');
+        $content = theme('item_list', $theme_args);
+        
+        //Set Cache from the admin page
+        $cache_var_result_div = '<div id="ajax-result"></div><input type="hidden" name="cache_var" id="cache_var" value="1">';
+        $cache_time = '+'.variable_get('googlesearch_cache_limit_var');
+        $expire = strtotime($cache_time,'0');
+        cache_set('googlesearchdata', $cache_var_result_div, 'cache', $expire);
+    }else{
+        $content_cached = $cached->data;
+        $cached_data =true;
+        $theme_args = array('items' => google_search_get_domains($cached_data), 'type' => 'li');
+        $content = $content_cached.theme('item_list', $theme_args);
+    }
+    return $content;
+}
+//Cache Setting Form
+function google_search_cacheform($form, &$form_state) {
+    $options = array();
+    for($i=1;$i<8;$i++){
+        $options[$i.' day'] = $i.' day';
+    }
+    $options['2 weeks']='2 weeks';
+    $options['3 weeks']='3 weeks';
+    $options['3 weeks']='3 weeks';
+    $form['googlesearch_cache_limit_var'] = array(
+        '#type' => 'select',
+        '#title' => t('Google Search Cache Limit'),
+        '#options' => $options,
+        '#default_value' => variable_get('googlesearch_cache_limit_var','1 day'),
+        '#description' => t('Select Cache time in Google search module'),
+    );
+    return system_settings_form($form);
+}
+/**
+* Implements page permissions for anonymous users
+*/
+function google_search_permission() {
+    return array(
+        'Google search content' => array(
+            'title' => t('Google search'),
+        ),
+    );
+}
+
+//Hook access funtion for anonymous Users.
+function hook_google_search_access() {
+    return user_access('access content');
+}
+
+//Extracting Domains and subdomains to match
+function extract_domain($domain){
+    if(preg_match("/(?P<domain>[a-z0-9][a-z0-9\-]{1,63}\.[a-z\.]{2,6})$/i", $domain, $matches)){
+        return $matches['domain'];
+    } else {
+        return $domain;
+    }
+}
+function extract_subdomains($domain){
+    $subdomains = $domain;
+    $domain = extract_domain($subdomains);
+    $subdomains = rtrim(strstr($subdomains, $domain, true), '.');
+    return $subdomains;
+}
+
+//Show relevant results after filtering it from google results.
+function google_search_get_domains($cached_data) {
+    if($cached_data ===true){
+        $cached = cache_get('googlesearchdata_results', 'cache');
+        $content = $cached->data;
+        return $content;
+    }else{
+        $urls = $_POST[output];
+        $item_nid= $urls[0]['node_id'];
+        $node_item =  node_load($item_nid);
+        $category_value =field_get_items('node', $node_item, 'field_category', $node_item->language);
+        $getCategoryTermId = isset($category_value) ? $category_value[0]['tid'] : null;
+        $show_nodes_list = array();
+        $show_nodes_array = variable_get('shownodes_nodes_toshow', array('add_domain'));
+        foreach ($show_nodes_array as $key => $value) {
+            if($value) {
+                array_push($show_nodes_list,$value);
+            }
+        }
+        $queryCategory = new EntityFieldQuery();
+        $nodes = array();
+
+        $queryCategory
+        ->entityCondition('entity_type', 'node')
+        ->entityCondition('bundle', $show_nodes_list)
+        ->propertyCondition('status', 1)
+        ->fieldCondition('field_category', 'tid',$getCategoryTermId);
+        $resultCategory = $queryCategory->execute();
+        $result_nids =array_keys($resultCategory['node']);
+        $nids = $result_nids;
+        $nodes = node_load_multiple($nids);
+
+        //Loop through the loded nodes to create a list, it will get through the theme and get the results displayed
+        $list = array();
+        $domainsNames = array();
+        if(!empty($nodes)){
+            foreach ($nodes as $node) {
+                $options = array('absolute' => TRUE);
+                $url = url('node/' . $node->nid, $options);
+                $list[] = ''.$node->title.'';
+                $items = field_get_items('node', $node, 'field_domain', $node->language);
+                $domainName = isset($items) ? $items[0]['value']:'';
+                $domainNames[] = $items[0]['value'];
+            }
+            $full_urls_listing = array();
+            $short_urls_listing = array();
+            $domains_only=array();
+            $domains_part = array();
+        
+            foreach($domainNames as $domainName){
+                $parsed = parse_url($domainName);
+                $parsed['path'] = str_replace ('www.','', $parsed['path']);
+                $link_array = explode('.',$parsed['path']);
+                $domains_part[] = $link_array[0];
+            }
+            $i=1;
+            foreach($urls as $domains){
+                foreach($domainNames as $domainName){
+                    $url = $domainName;
+                    $parsed = parse_url($url);
+                    $parsed['path'] = str_replace ('www.','', $parsed['path']);
+                    $parsed['path'] = str_replace ('.com','', $parsed['path']);
+                    $domain_o = extract_domain($domains['short_url']);
+                    if (preg_match('/'.$parsed['path'].'/i', $domains['short_url'])  && (!in_array($domains['full_url'], $full_urls_listing)) && (!in_array($domains['short_url'], $short_urls_listing))){
+                        $xx = explode('.',$domain_o);
+                        if ($i>3){
+                            if($xx[1]=='com' ){
+                                $domains_only[] = $xx[0];
+                                $short_urls_listing[]= $domains['short_url'];
+                                $full_urls_listing[]= '<a href="'.$domains['full_url'].'">'.$domains['full_url'].'</a>';
+                            }else if(end($xx)==$urls[0]['ipAddress']){
+                                $domains_only[] = $xx[0];
+                                $short_urls_listing[]= $domains['short_url'];
+                                $full_urls_listing[]= '<a href="'.$domains['full_url'].'">'.$domains['full_url'].'</a>';
+                            }
+                        }else if($i==2){
+                            $domains_only[] = $xx[0];
+                            $short_urls_listing[]= $domains['short_url'];
+                            $full_urls_listing[]= '<a href="'.$domains['full_url'].'">'.$domains['full_url'].'</a>';
+                        }
+                    }else if($i==2 && (!in_array($domains['full_url'], $full_urls_listing)) && (!in_array($domains['short_url'], $short_urls_listing)) && (!in_array($domain_o, $domains_only))){
+                        $domains_only[] = $xx[0];
+                        $short_urls_listing[]= $domains['short_url'];
+                        $full_urls_listing[]= '<a href="'.$domains['full_url'].'">'.$domains['full_url'].'</a>';
+                    }
+                }
+                $i++;
+            }
+
+            foreach($domainNames as $domainName){
+                foreach($full_urls_listing as $full_urls_listings){
+                    $url = $domainName;
+                    $parsed = parse_url($url);
+                    $parsed['path'] = str_replace ('www.','', $parsed['path']);
+                    $parsed['path'] = str_replace ('.com','', $parsed['path']);
+
+                    if(count($short_urls_listing) < 5 && (!in_array($parsed['path'], $domains_only)) && (!in_array($domains['full_url'], $full_urls_listing)) && (!in_array($domains['short_url'], $short_urls_listing))){
+                        $domains_only[] = $parsed['path'];
+                        $short_urls_listing[]= $domains['short_url'];
+                        $full_urls_listing[]= '<a href="'.$domains['full_url'].'">'.$domains['full_url'].'</a>';
+                    }
+                }
+            }
+        }else{
+            $j=1;
+            foreach($urls as $domains){
+                if($j<6){
+                    $full_urls_listing[]= '<a href="'.$domains['full_url'].'">'.$domains['full_url'].'</a>';
+                }
+                $j++;
+            }
+        }
+        //Display Final Results
+        foreach($full_urls_listing as $full_urls){
+            echo $full_urls.'<br>';
+        }
+        $cache_time = '+'.variable_get('googlesearch_cache_limit_var');
+        $expire = strtotime($cache_time,'0');
+        cache_set('googlesearchdata_results', $full_urls_listing, 'cache', $expire);
+    }
+}
