@@ -1,0 +1,17 @@
+/*
+To change this license header, choose License Headers in Project Properties.
+To change this template file, choose Tools | Templates
+and open the template in the editor.
+*/
+/* 
+    Created on : 24 Sep, 2015, 5:21:24 PM
+    Author     : neha.sapra
+*/
+
+.gsc-above-wrapper-area,.gsc-resultsHeader,.gcsc-branding,.gsc-cursor-box,.gsc-table-result,.tabs{
+    display:none;
+    height: 0px;
+}
+.item-list{
+    list-style-type: none;
+}
